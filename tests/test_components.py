@@ -7,6 +7,8 @@ code executor, and the full agent pipeline.
 import sys
 import os
 import importlib.util
+import json
+import tempfile
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -76,6 +78,11 @@ def test_knowledge_loader():
     assert qc_doc is not None
     assert "mitochondrial" in qc_doc["content"].lower()
     print(f"[PASS] QC best practices document loaded and contains expected content")
+
+    guardrail_doc = loader.get_document_by_id("study_design_guardrails")
+    assert guardrail_doc is not None
+    assert "sample-level" in guardrail_doc["content"].lower()
+    print(f"[PASS] Study design guardrails document loaded")
 
     return True
 
@@ -190,6 +197,78 @@ def test_resource_retriever():
     )
     assert [tool["name"] for tool in selected["tools"]] == ["load_h5ad"]
     print(f"[PASS] Invalid retrieval indices are ignored")
+
+    return True
+
+
+def test_provenance_recorder():
+    """Test run manifest creation and redaction."""
+    from cellagent.agent.provenance import ProvenanceRecorder
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        recorder = ProvenanceRecorder(tmpdir, run_id="test-run")
+        selected_resources = {
+            "tools": [{"name": "load_h5ad", "category": "preprocessing"}],
+            "knowledge": [{"id": "qc_best_practices", "name": "QC Guide"}],
+            "libraries": [{"name": "scanpy"}],
+        }
+
+        recorder.start_run(
+            query="Analyze PBMC data",
+            data_path="pbmc.h5ad",
+            config={"llm_model": "test-model", "api_key": "secret"},
+            selected_resources=selected_resources,
+        )
+        recorder.record_iteration(
+            iteration=1,
+            response="THOUGHT: test\nCODE:\n```python\nx = 1\n```",
+            code="x = 1",
+            execution_result={
+                "success": True,
+                "duration_seconds": 0.01,
+                "output": "ok",
+                "error": "",
+                "variables": ["x"],
+            },
+        )
+
+        output_file = os.path.join(recorder.run_dir, "plot.png")
+        with open(output_file, "wb") as f:
+            f.write(b"fake")
+
+        manifest_path = recorder.finish_run(
+            status="completed",
+            final_answer="Done",
+            final_adata_summary="AnnData: adata",
+        )
+
+        with open(manifest_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        assert manifest["run_id"] == "test-run"
+        assert manifest["config"]["api_key"] == "***"
+        assert manifest["selected_resources"]["tools"][0]["name"] == "load_h5ad"
+        assert manifest["iterations"][0]["code"] == "x = 1"
+        assert manifest["iterations"][0]["execution"]["duration_seconds"] == 0.01
+        assert manifest["output_files"][0]["path"] == "plot.png"
+        print(f"[PASS] Provenance manifest created: {manifest_path}")
+
+    return True
+
+
+def test_agent_run_directory():
+    """Test CellAgent uses isolated run output directories."""
+    from cellagent.config import CellAgentConfig
+    from cellagent.agent.cell_agent import CellAgent
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config = CellAgentConfig(verbose=False, use_resource_retriever=False)
+        agent = CellAgent(config=config, output_dir=tmpdir, run_id="demo-run")
+
+        assert agent.provenance.run_id == "demo-run"
+        assert agent.output_dir == os.path.join(os.path.abspath(tmpdir), "demo-run")
+        assert agent.executor.get_variable("OUTPUT_DIR") == agent.output_dir
+        print(f"[PASS] Agent output directory isolated: {agent.output_dir}")
 
     return True
 
@@ -321,6 +400,8 @@ def run_all_tests():
         ("Knowledge Loader", test_knowledge_loader),
         ("Code Executor", test_code_executor),
         ("Resource Retriever", test_resource_retriever),
+        ("Provenance Recorder", test_provenance_recorder),
+        ("Agent Run Directory", test_agent_run_directory),
         ("Synthetic Pipeline", test_synthetic_pipeline),
     ]
 

@@ -34,17 +34,13 @@ class CodeExecutor:
 
     def _setup_namespace(self):
         """Set up the execution namespace with common imports."""
-        setup_code = f"""
+        output_dir_literal = repr(self.output_dir)
+        base_setup_code = f"""
 import os
 import sys
-import numpy as np
-import pandas as pd
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 
 # Set default output directory
-OUTPUT_DIR = "{self.output_dir}"
+OUTPUT_DIR = {output_dir_literal}
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Suppress warnings for cleaner output
@@ -52,9 +48,20 @@ import warnings
 warnings.filterwarnings('ignore')
 """
         try:
-            exec(setup_code, self.namespace)
+            exec(base_setup_code, self.namespace)
         except Exception:
-            pass  # Non-critical if some imports fail
+            pass  # Non-critical; execution will surface path issues later.
+
+        optional_imports = [
+            "import numpy as np",
+            "import pandas as pd",
+            "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt",
+        ]
+        for import_code in optional_imports:
+            try:
+                exec(import_code, self.namespace)
+            except Exception:
+                continue
 
     def execute(self, code: str) -> dict:
         """Execute Python code in the persistent namespace.
@@ -80,10 +87,12 @@ warnings.filterwarnings('ignore')
             "output": "",
             "error": "",
             "variables": [],
+            "duration_seconds": None,
         }
 
         # Track existing variables
         existing_vars = set(self.namespace.keys())
+        started = time.monotonic()
 
         try:
             self._validate_code(code)
@@ -109,11 +118,13 @@ warnings.filterwarnings('ignore')
             sys.settrace(None)
             sys.stdout = old_stdout
             sys.stderr = old_stderr
+            result["duration_seconds"] = round(time.monotonic() - started, 6)
 
         # Record execution
         self.execution_history.append({
             "code": code,
             "success": result["success"],
+            "duration_seconds": result["duration_seconds"],
             "output_preview": result["output"][:500] if result["output"] else "",
             "error_preview": result["error"][:500] if result["error"] else "",
         })

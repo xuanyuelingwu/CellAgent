@@ -24,6 +24,9 @@ Examples:
   # Specify output directory
   cellagent --query "Run QC on the data" --data data.h5ad --output ./results
 
+  # Use a stable run ID for reproducible output paths
+  cellagent --query "Run QC on the data" --data data.h5ad --run-id pbmc-qc-v1
+
   # Use specific model
   cellagent --query "Cluster the cells" --model gpt-4.1-mini
 """,
@@ -38,6 +41,10 @@ Examples:
     parser.add_argument(
         "--output", "-o", type=str, default="./output",
         help="Output directory (default: ./output)"
+    )
+    parser.add_argument(
+        "--run-id", type=str, default=None,
+        help="Stable run identifier for output and provenance"
     )
     parser.add_argument(
         "--model", "-m", type=str, default=None,
@@ -77,7 +84,7 @@ Examples:
         config.llm_model = args.model
 
     # Initialize agent
-    agent = CellAgent(config=config, output_dir=args.output)
+    agent = CellAgent(config=config, output_dir=args.output, run_id=args.run_id)
 
     if args.interactive:
         _run_interactive(agent)

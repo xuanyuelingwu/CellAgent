@@ -18,6 +18,7 @@ from cellagent.tools.tool_registry import ToolRegistry
 from cellagent.knowledge.loader import KnowledgeLoader
 from cellagent.retriever.resource_retriever import ResourceRetriever
 from cellagent.agent.executor import CodeExecutor
+from cellagent.agent.provenance import ProvenanceRecorder
 
 
 # Available Python libraries for single-cell analysis
@@ -77,6 +78,19 @@ IMPORTANT RULES:
 7. Save all plots to the output directory
 8. Provide clear explanations of your analysis choices
 
+SINGLE-CELL BIOMEDICINE GUARDRAILS:
+1. Distinguish exploratory cell-level marker discovery from sample/donor-level
+   condition differential expression. Do not present cluster markers as
+   condition-level biological conclusions.
+2. Before condition comparisons, check whether sample, donor, batch, tissue,
+   and condition metadata are available and whether replication is adequate.
+3. Prefer explicit parameters, random seeds, and saved intermediate artifacts
+   so analyses can be inspected and rerun.
+4. When cell type annotation is uncertain, report marker evidence and caveats
+   instead of overstating a label.
+5. Treat LLM-generated analysis as a draft that needs domain review for
+   experimental design, QC thresholds, and biological interpretation.
+
 RESPONSE FORMAT:
 For each step, respond with:
 
@@ -105,24 +119,30 @@ DOMAIN KNOWLEDGE:
         config: CellAgentConfig | None = None,
         knowledge_dir: str | None = None,
         output_dir: str = "./output",
+        run_id: str | None = None,
+        create_run_dir: bool = True,
     ):
         """Initialize CellAgent.
 
         Args:
             config: Agent configuration. Uses default if None.
             knowledge_dir: Custom knowledge directory path.
-            output_dir: Directory for output files and plots.
+            output_dir: Base directory for output files and plots.
+            run_id: Optional stable run identifier for provenance.
+            create_run_dir: If True, create an isolated run subdirectory.
         """
         self.config = config or default_config
-        self.output_dir = output_dir
-        os.makedirs(output_dir, exist_ok=True)
+        self.base_output_dir = output_dir
+        self.provenance = ProvenanceRecorder(output_dir, run_id=run_id)
+        self.output_dir = self.provenance.run_dir if create_run_dir else os.path.abspath(output_dir)
+        os.makedirs(self.output_dir, exist_ok=True)
 
         # Initialize components
         self.registry = build_default_registry()
         self.knowledge = KnowledgeLoader(knowledge_dir)
         self.retriever = ResourceRetriever(config=self.config)
         self.executor = CodeExecutor(
-            output_dir=output_dir,
+            output_dir=self.output_dir,
             timeout_seconds=self.config.timeout_seconds,
         )
 
@@ -137,6 +157,7 @@ DOMAIN KNOWLEDGE:
         if self.config.verbose:
             print(f"CellAgent initialized with {len(self.registry)} tools "
                   f"and {len(self.knowledge.documents)} knowledge documents")
+            print(f"Run ID: {self.provenance.run_id}")
 
     def configure(self, query: str) -> dict:
         """Configure the agent for a specific query by retrieving relevant resources.
@@ -253,6 +274,14 @@ DOMAIN KNOWLEDGE:
             n_tools = len(selected_resources.get("tools", []))
             n_knowledge = len(selected_resources.get("knowledge", []))
             print(f"Selected {n_tools} tools and {n_knowledge} knowledge documents")
+            print(f"Output directory: {self.output_dir}")
+
+        self.provenance.start_run(
+            query=query,
+            data_path=data_path,
+            config=self.config.to_dict(),
+            selected_resources=selected_resources,
+        )
 
         # Build system prompt
         system_prompt = self._build_system_prompt(selected_resources)
@@ -313,6 +342,10 @@ DOMAIN KNOWLEDGE:
             answer = self._extract_answer(response)
             if answer:
                 final_answer = answer
+                self.provenance.record_iteration(
+                    iteration=self.iteration_count,
+                    response=response,
+                )
                 if self.config.verbose:
                     print(f"\nFINAL ANSWER: {answer[:300]}...")
                 break
@@ -325,6 +358,12 @@ DOMAIN KNOWLEDGE:
 
                 exec_result = self.executor.execute(code)
                 result_msg = self._format_execution_result(exec_result)
+                self.provenance.record_iteration(
+                    iteration=self.iteration_count,
+                    response=response,
+                    code=code,
+                    execution_result=exec_result,
+                )
 
                 if self.config.verbose:
                     status = "SUCCESS" if exec_result["success"] else "ERROR"
@@ -337,6 +376,10 @@ DOMAIN KNOWLEDGE:
                 self.messages.append({"role": "user", "content": result_msg})
             else:
                 # No code and no answer - might be just thinking
+                self.provenance.record_iteration(
+                    iteration=self.iteration_count,
+                    response=response,
+                )
                 self.messages.append({"role": "assistant", "content": response})
                 self.messages.append({
                     "role": "user",
@@ -346,21 +389,35 @@ DOMAIN KNOWLEDGE:
         if final_answer is None:
             final_answer = "Analysis completed (max iterations reached). Check the output directory for results."
 
+        manifest_path = self.provenance.finish_run(
+            status="completed",
+            final_answer=final_answer,
+            final_adata_summary=self.executor.get_adata_summary(),
+        )
+
         # Generate summary
-        summary = self._generate_summary(query, final_answer)
+        summary = self._generate_summary(query, final_answer, manifest_path)
         return summary
 
-    def _generate_summary(self, query: str, answer: str) -> str:
+    def _generate_summary(
+        self,
+        query: str,
+        answer: str,
+        manifest_path: str | None = None,
+    ) -> str:
         """Generate a formatted summary of the analysis."""
         lines = [
             "=" * 60,
             "CELLAGENT ANALYSIS REPORT",
             "=" * 60,
             f"\nQuery: {query}",
+            f"Run ID: {self.provenance.run_id}",
             f"Iterations: {self.iteration_count}",
             f"Output directory: {self.output_dir}",
-            "",
         ]
+        if manifest_path:
+            lines.append(f"Run manifest: {manifest_path}")
+        lines.append("")
 
         # List generated files
         if os.path.exists(self.output_dir):
@@ -413,6 +470,12 @@ DOMAIN KNOWLEDGE:
         if code:
             exec_result = self.executor.execute(code)
             result_msg = self._format_execution_result(exec_result)
+            self.provenance.record_iteration(
+                iteration=self.iteration_count + 1,
+                response=response,
+                code=code,
+                execution_result=exec_result,
+            )
             self.messages.append({"role": "assistant", "content": response})
             self.messages.append({"role": "user", "content": result_msg})
 
@@ -426,9 +489,17 @@ DOMAIN KNOWLEDGE:
                 api_key=self.config.api_key,
             )
             self.messages.append({"role": "assistant", "content": follow_up})
+            self.provenance.record_iteration(
+                iteration=self.iteration_count + 2,
+                response=follow_up,
+            )
             return follow_up
         else:
             self.messages.append({"role": "assistant", "content": response})
+            self.provenance.record_iteration(
+                iteration=self.iteration_count + 1,
+                response=response,
+            )
             return response
 
     def reset(self):
