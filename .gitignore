@@ -6,6 +6,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.codex_tmp_wheels/
 *.egg
 .pytest_cache/
 .ruff_cache/
