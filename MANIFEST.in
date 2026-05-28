@@ -1,0 +1,7 @@
+include README.md
+include PUBLISHING.md
+include LICENSE
+recursive-include cellagent/knowledge *.md
+recursive-include examples *.py *.md *.png *.csv
+recursive-include tests *.py
+global-exclude __pycache__ *.py[cod]

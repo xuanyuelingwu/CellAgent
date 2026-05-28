@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "cellagent"
+version = "0.1.0"
+description = "LLM-assisted agent and tool library for single-cell RNA-seq analysis"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "CellAgent Team"},
+]
+keywords = ["single-cell", "bioinformatics", "AI agent", "scRNA-seq", "scanpy"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "openai>=1.0.0",
+    "scanpy>=1.9.0",
+    "anndata>=0.9.0",
+    "numpy>=1.23.0",
+    "pandas>=1.5.0",
+    "matplotlib>=3.6.0",
+    "seaborn>=0.12.0",
+    "scipy>=1.9.0",
+    "scikit-learn>=1.1.0",
+]
+
+[project.optional-dependencies]
+full = [
+    "harmonypy>=0.0.9",
+    "bbknn>=1.5.0",
+    "scrublet>=0.2.3",
+    "gseapy>=1.0.0",
+    "leidenalg>=0.9.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+cellagent = "cellagent.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/xuanyuelingwu/CellAgent"
+Repository = "https://github.com/xuanyuelingwu/CellAgent"
+
+[tool.setuptools.packages.find]
+include = ["cellagent*"]
+
+[tool.setuptools.package-data]
+"cellagent.knowledge" = ["*.md"]
